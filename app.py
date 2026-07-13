@@ -123,30 +123,28 @@ with tab1:
                         if save_btn:
                             save_data = {
                                 "exam_id": exam_id.strip(), 
-                                "question_number": item['question_number'], 
+                                "question_number": str(item['question_number']).strip(), # 문자열 공백 제거 통일
                                 "user_name": user_name, 
                                 "user_memo": user_memo
                             }
                             
                             try:
-                                # 🚨 [APIError 수정] upsert를 버리고 기존 데이터 체크 후 분기 처리
+                                # upsert 대신 안전한 수동 분기 처리
                                 check_res = supabase.table("wrong_notes") \
                                     .select("*") \
                                     .eq("exam_id", exam_id.strip()) \
-                                    .eq("question_number", item['question_number']) \
+                                    .eq("question_number", str(item['question_number']).strip()) \
                                     .eq("user_name", user_name) \
                                     .execute()
                                 
                                 if check_res.data:
-                                    # 데이터가 이미 존재하면 수정 (Update)
                                     supabase.table("wrong_notes") \
                                         .update({"user_memo": user_memo}) \
                                         .eq("exam_id", exam_id.strip()) \
-                                        .eq("question_number", item['question_number']) \
+                                        .eq("question_number", str(item['question_number']).strip()) \
                                         .eq("user_name", user_name) \
                                         .execute()
                                 else:
-                                    # 데이터가 없으면 신규 삽입 (Insert)
                                     supabase.table("wrong_notes").insert(save_data).execute()
                                     
                                 st.toast(f"🎉 {item['question_number']}번 오답노트 저장 완료!")
@@ -205,14 +203,14 @@ with tab2:
                     st.error(f"등록 실패: {e}")
 
 # ==========================================
-# 탭 3: 내가 작성한 오답노트 보관함
+# 탭 3: 내가 작성한 오답노트 보관함 (매칭 성능 보완 완료)
 # ==========================================
 with tab3:
     st.title("🔍 내 손안의 오답노트 보관함")
 
     try:
         exam_res = supabase.table("wrong_notes").select("exam_id").eq("user_name", user_name).execute()
-        exam_list = list(set([n["exam_id"] for n in exam_res.data])) if exam_res.data else []
+        exam_list = list(set([n["exam_id"].strip() for n in exam_res.data])) if exam_res.data else []
     except Exception as e:
         exam_list = []
 
@@ -223,27 +221,32 @@ with tab3:
 
         if selected_exam:
             with st.spinner("오답 기록장 가져오는 중..."):
-                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", selected_exam).eq("user_name", user_name).execute()
+                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", selected_exam.strip()).eq("user_name", user_name).execute()
                 saved_notes = notes_res.data
 
-                q_res = supabase.table("questions").select("*").eq("exam_id", selected_exam).execute()
-                questions_dict = {q["question_number"]: q for q in q_res.data} if q_res.data else {}
+                q_res = supabase.table("questions").select("*").eq("exam_id", selected_exam.strip()).execute()
+                
+                # 데이터 타입(int vs text) 충돌을 막기 위해 딕셔너리 Key를 문자열 스트립 형태로 강제 가공
+                questions_dict = {str(q["question_number"]).strip(): q for q in q_res.data} if q_res.data else {}
 
                 if not saved_notes:
                     st.info("이 시험지에는 저장된 오답 메모가 없습니다.")
                 else:
-                    saved_notes.sort(key=lambda x: x["question_number"])
+                    st.subheader(f"📋 '{selected_exam}' 오답 복습 리스트 (총 {len(saved_notes)}문항)")
+                    
+                    # 문항 정렬 시 텍스트 번호를 숫자로 안전하게 파싱하여 순서대로 정렬
+                    saved_notes.sort(key=lambda x: int(str(x["question_number"]).strip()) if str(x["question_number"]).strip().isdigit() else 0)
 
                     for note in saved_notes:
-                        q_num = note["question_number"]
-                        q_info = questions_dict.get(q_num, {})
+                        q_num_str = str(note["question_number"]).strip()
+                        q_info = questions_dict.get(q_num_str, {})
                         correct_ans = q_info.get("answer", "알 수 없음")
 
-                        with st.form(key=f"review_form_{selected_exam}_{q_num}"):
-                            st.markdown(f"### ❓ {q_num}번 문제")
+                        with st.form(key=f"review_form_{selected_exam}_{q_num_str}"):
+                            st.markdown(f"### ❓ {q_num_str}번 문제")
                             st.markdown(f"**🎯 실제 정답:** `{correct_ans}`")
                             
-                            new_memo = st.text_area("✍️ 오답 기록 수정", value=note["user_memo"], key=f"review_{selected_exam}_{q_num}")
+                            new_memo = st.text_area("✍️ 오답 기록 수정", value=note["user_memo"], key=f"review_{selected_exam}_{q_num_str}")
 
                             col1, col2 = st.columns([1, 8])
                             with col1:
@@ -252,13 +255,12 @@ with tab3:
                                     try:
                                         supabase.table("wrong_notes") \
                                             .update({"user_memo": new_memo}) \
-                                            .eq("exam_id", selected_exam) \
-                                            .eq("question_number", q_num) \
+                                            .eq("exam_id", selected_exam.strip()) \
+                                            .eq("question_number", q_num_str) \
                                             .eq("user_name", user_name) \
                                             .execute()
                                         st.toast("💡 오답 메모가 수정되었습니다!")
                                     except Exception as db_err:
                                         st.error(f"❌ 수정 실패: {db_err}")
                             with col2:
-                                # 삭제 기능은 form 내부 트래픽 꼬임을 방지하기 위해 보류 처리
                                 pass
