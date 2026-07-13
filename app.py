@@ -7,8 +7,11 @@ from supabase import create_client, Client
 SUPABASE_URL = "https://kktrkhfpxeavhaugzohd.supabase.co"
 SUPABASE_KEY = "sb_publishable_c0dtskcvaF1CjK9fZwBm-g_XgRg6hXH"
 
-# 🎯 요청하신 디스코드 웹훅 주소 반영 완료!
+# 디스코드 웹훅 주소
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1526179676924674131/BiC8_dzOucdmx6-8j--22MNpbeGdIwCdQr8x_9B0goOYb68m0Q0cKCy8vFz8sLElX0wo"
+
+# 🔒 [관리자 마스터 비밀번호 설정] 원하시는 비밀번호로 변경하세요!
+ADMIN_MASTER_PASSWORD = "admin1234"
 
 @st.cache_resource
 def init_supabase() -> Client:
@@ -23,12 +26,11 @@ def send_discord_notification(name, text):
     if not DISCORD_WEBHOOK_URL or "YOUR_WEBHOOK" in DISCORD_WEBHOOK_URL:
         return
 
-    # 디스코드에 가독성 좋게 표시될 깔끔한 카드(Embed)형 템플릿
     payload = {
         "embeds": [
             {
                 "title": "✉️ 새로운 개발자 피드백이 도착했습니다!",
-                "color": 5814783,  # 디스코드 고유 Blurple 색상 코드
+                "color": 5814783,
                 "fields": [
                     {"name": "👤 작성자", "value": name, "inline": True},
                     {"name": "✍️ 내용", "value": text, "inline": False}
@@ -58,6 +60,12 @@ with st.sidebar:
     exam_id = st.text_input("시험 이름을 입력하세요", value="2026년 3월 고3 수학", key="search_exam_id")
 
     st.divider()
+    # 🔒 악용 방지용 관리자 인증 구역
+    st.header("🔒 관리자 전용 인증")
+    st.caption("새 시험지 정답을 등록할 때만 마스터 비밀번호를 입력하세요.")
+    admin_password_input = st.text_input("관리자 암호", value="", type="password").strip()
+
+    st.divider()
     # 💬 개발자 피드백 수집 구역
     st.header("✉️ 개발자에게 한마디")
     st.caption("앱을 쓰면서 불편했던 점이나 바라는 점을 적어주시면 개발자에게 실시간 전송됩니다!")
@@ -72,15 +80,12 @@ with st.sidebar:
             else:
                 sender_name = user_name if user_name else "익명"
                 try:
-                    # 1. 데이터 백업용 Supabase 기록 저장
                     supabase.table("feedbacks").insert({
                         "user_name": sender_name,
                         "content": feedback_text.strip()
                     }).execute()
                     
-                    # 2. 내 디스코드 채널로 푸시 알림 즉시 발송 🚀
                     send_discord_notification(sender_name, feedback_text.strip())
-                    
                     st.success("💖 피드백이 안전하게 전달되었습니다. 감사합니다!")
                 except Exception as fb_err:
                     st.error(f"피드백 전송 실패: {fb_err}")
@@ -220,10 +225,11 @@ with tab1:
                                 st.error(f"❌ 데이터베이스 저장 실패: {db_err}")
 
 # ==========================================
-# 탭 2: 관리자용 [가변형 정답 등록기]
+# 탭 2: 관리자용 [가변형 정답 등록기] (보안 강화 완료)
 # ==========================================
 with tab2:
     st.title("⚙️ 모의고사 정답 초고속 등록기")
+    st.info("⚠️ 악용 방지를 위해 정답을 일괄 등록하려면 사이드바 하단의 **[🔒 관리자 전용 인증]** 암호가 정확해야 합니다.")
     
     with st.form(key="register_form"):
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -240,34 +246,38 @@ with tab2:
         submit_registration = st.form_submit_button("🔥 클릭 한 번으로 DB에 맞춤형 문항 일괄 등록", type="primary")
 
     if submit_registration:
-        reg_exam_id = f"{reg_year}년 {reg_month}월 {reg_grade} {reg_subject}"
-        ans_list = raw_answers.strip().split()
-        
-        if len(ans_list) != reg_total_q:
-            st.error(f"설정된 문항 수는 {reg_total_q}개인데, 입력된 정답은 {len(ans_list)}개입니다.")
+        # 🔒 핵심 보안 로직: 마스터 패스워드 검증
+        if admin_password_input != ADMIN_MASTER_PASSWORD:
+            st.error("❌ 관리자 비밀번호가 올바르지 않습니다! 정답지 등록 권한이 없습니다.")
         else:
-            with st.spinner("Supabase DB에 정답지 생성 중..."):
-                try:
-                    supabase.table("questions").delete().eq("exam_id", reg_exam_id).execute()
-                    bulk_data = []
-                    for i in range(reg_total_q):
-                        row_data = {
-                            "year": reg_year,
-                            "month": reg_month,
-                            "grade": reg_grade,
-                            "subject": reg_subject,
-                            "exam_id": reg_exam_id,
-                            "question_number": i + 1,
-                            "answer": ans_list[i],
-                            "concept_tags": [] 
-                        }
-                        bulk_data.append(row_data)
-                    
-                    supabase.table("questions").insert(bulk_data).execute()
-                    st.balloons()
-                    st.success(f"🎉 '{reg_exam_id}' 등록 성공!")
-                except Exception as e:
-                    st.error(f"등록 실패: {e}")
+            reg_exam_id = f"{reg_year}년 {reg_month}월 {reg_grade} {reg_subject}"
+            ans_list = raw_answers.strip().split()
+            
+            if len(ans_list) != reg_total_q:
+                st.error(f"설정된 문항 수는 {reg_total_q}개인데, 입력된 정답은 {len(ans_list)}개입니다.")
+            else:
+                with st.spinner("Supabase DB에 정답지 생성 중..."):
+                    try:
+                        supabase.table("questions").delete().eq("exam_id", reg_exam_id).execute()
+                        bulk_data = []
+                        for i in range(reg_total_q):
+                            row_data = {
+                                "year": reg_year,
+                                "month": reg_month,
+                                "grade": reg_grade,
+                                "subject": reg_subject,
+                                "exam_id": reg_exam_id,
+                                "question_number": i + 1,
+                                "answer": ans_list[i],
+                                "concept_tags": [] 
+                            }
+                            bulk_data.append(row_data)
+                        
+                        supabase.table("questions").insert(bulk_data).execute()
+                        st.balloons()
+                        st.success(f"🎉 '{reg_exam_id}' 등록 성공!")
+                    except Exception as e:
+                        st.error(f"등록 실패: {e}")
 
 # ==========================================
 # 탭 3: 내가 작성한 오답노트 보관함
