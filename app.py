@@ -1,5 +1,15 @@
 import streamlit as st
-import requests
+from supabase import create_client, Client
+
+# 1. Supabase 연동 설정 (내 Supabase 프로젝트 주소와 anon key로 변경해 주세요!)
+SUPABASE_URL = "https://kktrkhfpxeavhaugzohd.supabase.co"
+SUPABASE_KEY = "sb_publishable_c0dtskcvaF1CjK9fZwBm-g_XgRg6hXH"
+
+@st.cache_resource
+def init_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_supabase()
 
 st.set_page_config(page_title="스마트 오답노트", layout="wide")
 
@@ -23,44 +33,70 @@ for row in range(5):
 st.divider()
 
 if st.button("🚀 전 문항 일괄 채점 및 분석하기", type="primary"):
-    with st.spinner("데이터 분석 및 채점 동기화 중..."):
-        payload = {
-            "exam_id": exam_id,
-            "user_answers": user_answers
-        }
-        
+    with st.spinner("클라우드 DB 조회 및 채점 중..."):
         try:
-            response = requests.post("http://127.0.0.1:8000/api/grade", json=payload)
+            # 2. Supabase에서 해당 시험의 정답 데이터 가져오기
+            res = supabase.table("questions").select("*").eq("exam_id", exam_id).execute()
+            questions = res.data
             
-            if response.status_code == 200:
-                result = response.json()
+            if not questions:
+                st.error("입력하신 시험 ID 정보가 없습니다.")
+            else:
+                # 3. 채점 및 오답노트 처리 로직
+                wrong_questions = []
+                correct_count = 0
                 
-                st.success(f"💯 채점 완료! 내 성적: {result['score']}")
+                # 기존 오답 기록장(wrong_notes) 데이터도 함께 조회해서 싱크 맞추기
+                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", exam_id).execute()
+                saved_memos = {str(n["question_number"]): n["user_memo"] for n in notes_res.data}
                 
-                if result['wrong_count'] == 0:
+                # 문제 순서 정렬
+                questions.sort(key=lambda x: x["question_number"])
+                
+                for q in questions:
+                    q_num_str = str(q["question_number"])
+                    user_ans = user_answers.get(q_num_str, "").strip()
+                    correct_ans = str(q["answer"]).strip()
+                    
+                    if user_ans == correct_ans:
+                        correct_count += 1
+                    else:
+                        wrong_questions.append({
+                            "question_number": q["question_number"],
+                            "correct_answer": correct_ans,
+                            "user_answer": user_ans if user_ans else "(미제출)",
+                            "concept_tags": q.get("concept_tags", []),
+                            "saved_memo": saved_memos.get(q_num_str, "")
+                        })
+                
+                total_questions = len(questions)
+                score_str = f"{correct_count}/{total_questions}"
+                wrong_count = len(wrong_questions)
+                
+                # 4. 화면 결과 출력
+                st.success(f"💯 채점 완료! 내 성적: {score_str}")
+                
+                if wrong_count == 0:
                     st.balloons()
                     st.info("와우! 만점입니다! 취약한 단원이 없습니다. 🎉")
                 else:
+                    # 취약 단원 분석 통계
                     tag_counts = {}
-                    for item in result['wrong_questions']:
+                    for item in wrong_questions:
                         for tag in item['concept_tags']:
                             tag_counts[tag] = tag_counts.get(tag, 0) + 1
                     
-                    # 📊 이 부분을 수정했습니다!
                     if tag_counts:
                         st.subheader("📊 내 취약 개념 통계 분석")
                         st.caption("틀린 문제들의 개념 태그를 분석한 결과입니다.")
-                        
-                        # 💡 horizontal=True 옵션을 넣어 가로형 막대그래프로 변경! 
-                        # 이렇게 하면 글자가 절대 아래로 눕지 않고 왼쪽에서 똑바로 보입니다.
                         st.bar_chart(tag_counts, horizontal=True)
                     
                     st.divider()
                     
                     # 오답노트 리스트 출력
-                    st.subheader(f"❌ 틀린 문제 오답 노트 ({result['wrong_count']}문항)")
+                    st.subheader(f"❌ 틀린 문제 오답 노트 ({wrong_count}문항)")
                     
-                    for item in result['wrong_questions']:
+                    for item in wrong_questions:
                         with st.container(border=True):
                             st.markdown(f"### ❓ {item['question_number']}번 문제")
                             st.markdown(f"**🏷️ 출제 개념:** {', '.join(item['concept_tags']) if item['concept_tags'] else '지정 없음'}")
@@ -76,19 +112,15 @@ if st.button("🚀 전 문항 일괄 채점 및 분석하기", type="primary"):
                             )
                             
                             if st.button("💾 DB에 영구 저장하기", key=f"btn_{exam_id}_{item['question_number']}"):
-                                save_payload = {
+                                # Supabase wrong_notes 테이블에 저장 (upsert 구조)
+                                save_data = {
                                     "exam_id": exam_id,
                                     "question_number": item['question_number'],
                                     "user_memo": user_memo
                                 }
-                                save_res = requests.post("http://127.0.0.1:8000/api/save-note", json=save_payload)
+                                # 기존 기록이 있으면 업데이트, 없으면 추가
+                                supabase.table("wrong_notes").upsert(save_data, on_conflict="exam_id,question_number").execute()
+                                st.toast(f"🎉 {item['question_number']}번 오답 메모가 영구 저장되었습니다!")
                                 
-                                if save_res.status_code == 200:
-                                    st.toast(f"🎉 {item['question_number']}번 오답 메모가 영구 저장되었습니다!")
-                                else:
-                                    st.error("메모 저장 실패 😭")
-                                
-            elif response.status_code == 404:
-                st.error("입력하신 시험 ID 정보가 없습니다.")
         except Exception as e:
-            st.error(f"서버 통신 실패: {e}")
+            st.error(f"클라우드 통신 실패: {e}")
