@@ -72,7 +72,6 @@ with tab1:
 
     # 채점 결과 및 오답노트 작성 구역
     if submit_marking or st.session_state.get("show_wrong_notes", False):
-        # 채점 버튼을 누르면 상태 고정
         st.session_state["show_wrong_notes"] = True
         
         if not questions_db:
@@ -114,14 +113,11 @@ with tab1:
                 st.caption("📝 메모를 적은 후 아래 [💾 이 문항 오답 저장] 버튼을 누르면 DB에 안전하게 저장됩니다.")
                 
                 for item in wrong_questions:
-                    # 🚨 [개선 핵심] 오답노트 적을 때 튕기지 않도록 각 문항별 입력창과 버튼을 st.form으로 독립 격리!
                     with st.form(key=f"wrong_note_form_{exam_id}_{item['question_number']}"):
                         st.markdown(f"### ❓ {item['question_number']}번 문제")
                         st.error(f"내가 제출한 답: {item['user_answer']}  |  **실제 정답: {item['correct_answer']}**")
                         
-                        # form 내부에 있으므로 이제 타이핑하거나 다른 칸으로 가도 절대 꺼지지 않습니다.
                         user_memo = st.text_area("오답 메모 입력", value=item['saved_memo'], key=f"input_{exam_id}_{item['question_number']}")
-                        
                         save_btn = st.form_submit_button("💾 이 문항 오답 저장")
                         
                         if save_btn:
@@ -131,8 +127,32 @@ with tab1:
                                 "user_name": user_name, 
                                 "user_memo": user_memo
                             }
-                            supabase.table("wrong_notes").upsert(save_data, on_conflict="exam_id,question_number,user_name").execute()
-                            st.toast(f"🎉 {item['question_number']}번 오답노트 저장 완료!")
+                            
+                            try:
+                                # 🚨 [APIError 수정] upsert를 버리고 기존 데이터 체크 후 분기 처리
+                                check_res = supabase.table("wrong_notes") \
+                                    .select("*") \
+                                    .eq("exam_id", exam_id.strip()) \
+                                    .eq("question_number", item['question_number']) \
+                                    .eq("user_name", user_name) \
+                                    .execute()
+                                
+                                if check_res.data:
+                                    # 데이터가 이미 존재하면 수정 (Update)
+                                    supabase.table("wrong_notes") \
+                                        .update({"user_memo": user_memo}) \
+                                        .eq("exam_id", exam_id.strip()) \
+                                        .eq("question_number", item['question_number']) \
+                                        .eq("user_name", user_name) \
+                                        .execute()
+                                else:
+                                    # 데이터가 없으면 신규 삽입 (Insert)
+                                    supabase.table("wrong_notes").insert(save_data).execute()
+                                    
+                                st.toast(f"🎉 {item['question_number']}번 오답노트 저장 완료!")
+                            
+                            except Exception as db_err:
+                                st.error(f"❌ 데이터베이스 저장 실패: {db_err}")
 
 # ==========================================
 # 탭 2: 관리자용 [가변형 정답 등록기]
@@ -219,7 +239,6 @@ with tab3:
                         q_info = questions_dict.get(q_num, {})
                         correct_ans = q_info.get("answer", "알 수 없음")
 
-                        # 보관함 탭의 수정 기능도 각각 Form으로 격리하여 타이핑 시 날아감 방지
                         with st.form(key=f"review_form_{selected_exam}_{q_num}"):
                             st.markdown(f"### ❓ {q_num}번 문제")
                             st.markdown(f"**🎯 실제 정답:** `{correct_ans}`")
@@ -230,13 +249,16 @@ with tab3:
                             with col1:
                                 edit_btn = st.form_submit_button("📝 수정")
                                 if edit_btn:
-                                    supabase.table("wrong_notes").upsert({
-                                        "exam_id": selected_exam,
-                                        "question_number": q_num,
-                                        "user_name": user_name,
-                                        "user_memo": new_memo
-                                    }, on_conflict="exam_id,question_number,user_name").execute()
-                                    st.toast("💡 오답 메모가 수정되었습니다!")
+                                    try:
+                                        supabase.table("wrong_notes") \
+                                            .update({"user_memo": new_memo}) \
+                                            .eq("exam_id", selected_exam) \
+                                            .eq("question_number", q_num) \
+                                            .eq("user_name", user_name) \
+                                            .execute()
+                                        st.toast("💡 오답 메모가 수정되었습니다!")
+                                    except Exception as db_err:
+                                        st.error(f"❌ 수정 실패: {db_err}")
                             with col2:
-                                # 삭제 버튼은 form 밖에 두거나 클릭 시 바로 리로드 되도록 처리
+                                # 삭제 기능은 form 내부 트래픽 꼬임을 방지하기 위해 보류 처리
                                 pass
