@@ -16,7 +16,6 @@ st.set_page_config(page_title="스마트 오답노트 마스터", layout="wide")
 # 사이드바를 공통 영역으로 활용하여 사용자 정보를 상시 입력받음
 with st.sidebar:
     st.header("👤 사용자 인증")
-    # [핵심] 여러 사람이 쓸 때 누가 누군지 구분하는 고유 이름(아이디)
     user_name = st.text_input("내 이름(닉네임)을 입력하세요", value="홍길동").strip()
     
     st.divider()
@@ -31,10 +30,10 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # ==========================================
-# 탭 1: 모의고사 채점 및 취약점 분석 (개인별 오답 저장)
+# 탭 1: 모의고사 채점 및 오답노트 (개인별 오답 저장)
 # ==========================================
 with tab1:
-    st.title("📊 취약점 분석 스마트 오답노트")
+    st.title("📊 스마트 오답노트 채점기")
     st.caption(f"현재 **[{user_name}]** 님으로 접속 중입니다. 본인의 답안을 채점하세요.")
 
     if not user_name:
@@ -77,7 +76,6 @@ with tab1:
                 wrong_questions = []
                 correct_count = 0
                 
-                # [개선] 오답 노트를 불러올 때 '현재 로그인한 사용자(user_name)'의 데이터만 필터링해서 가져옴
                 notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", exam_id.strip()).eq("user_name", user_name).execute()
                 saved_memos = {str(n["question_number"]): n["user_memo"] for n in notes_res.data}
                 
@@ -95,7 +93,6 @@ with tab1:
                             "question_number": q["question_number"],
                             "correct_answer": correct_ans,
                             "user_answer": user_ans if user_ans else "(미제출)",
-                            "concept_tags": q.get("concept_tags", []),
                             "saved_memo": saved_memos.get(q_num_str, "")
                         })
                 
@@ -108,27 +105,17 @@ with tab1:
                     st.balloons()
                     st.info("와우! 만점입니다! 🎉")
                 else:
-                    tag_counts = {}
-                    for item in wrong_questions:
-                        for tag in item['concept_tags']:
-                            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                    # [삭제] 크래시를 유발하던 개념 태그 분석 통계 차트(st.bar_chart)를 전면 제거했습니다.
                     
-                    if tag_counts:
-                        st.subheader("📊 내 취약 개념 통계 분석")
-                        st.bar_chart(tag_counts, horizontal=True)
-                    
-                    st.divider()
                     st.subheader(f"❌ 틀린 문제 오답 노트 ({wrong_count}문항)")
                     
                     for item in wrong_questions:
                         with st.container(border=True):
                             st.markdown(f"### ❓ {item['question_number']}번 문제")
-                            st.markdown(f"**🏷️ 출제 개념:** {', '.join(item['concept_tags']) if item['concept_tags'] else '지정 없음'}")
                             st.error(f"내가 제출한 답: {item['user_answer']}  |  **실제 정답: {item['correct_answer']}**")
                             
                             user_memo = st.text_area("오답 메모", value=item['saved_memo'], key=f"input_{exam_id}_{item['question_number']}")
                             if st.button("💾 DB에 영구 저장하기", key=f"btn_{exam_id}_{item['question_number']}"):
-                                # [개선] 저장할 때 누구의 오답노트인지 user_name을 같이 명시하여 저장
                                 save_data = {
                                     "exam_id": exam_id.strip(), 
                                     "question_number": item['question_number'], 
@@ -139,11 +126,11 @@ with tab1:
                                 st.toast(f"🎉 {item['question_number']}번 오답 메모가 [{user_name}]님 전용 공간에 저장되었습니다!")
 
 # ==========================================
-# 탭 2: 관리자용 [가변형 정답 등록기]
+# 탭 2: 관리자용 [가변형 정답 등록기] - 태그 기능 제거 버전
 # ==========================================
 with tab2:
     st.title("⚙️ 모의고사 정답 초고속 등록기")
-    st.caption("과목별로 다른 시험 문제 수를 자유롭게 지정하여 등록할 수 있습니다. (정답지는 전 세계 공통입니다.)")
+    st.caption("과목별로 다른 시험 문제 수를 자유롭게 지정하여 등록할 수 있습니다.")
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: reg_year = st.number_input("년도", value=2026, step=1)
@@ -161,12 +148,10 @@ with tab2:
     default_ans = " ".join(["1" if i%5==0 else "2" if i%5==1 else "3" if i%5==2 else "4" if i%5==3 else "5" for i in range(reg_total_q)])
     raw_answers = st.text_input("정답 입력창", value=default_ans)
 
-    st.subheader("🏷️ 단원 개념 태그 입력")
-    raw_tags = st.text_area("개념 태그 입력창 (쉼표 구분)", value="행렬,수열,방정식,미분,적분,함수,기하,확률,통계,로그,지수,삼각함수,수열의극한,함수의극한")
+    # [삭제] 크래시의 원인인 '단원 개념 태그 입력창(raw_tags)'을 전면 삭제했습니다.
 
     if st.button("🔥 클릭 한 번으로 DB에 맞춤형 문항 일괄 등록", type="primary"):
         ans_list = raw_answers.strip().split()
-        tag_list = [t.strip() for t in raw_tags.strip().split(",")]
         
         if len(ans_list) != reg_total_q:
             st.error(f"설정된 문항 수는 {reg_total_q}개인데, 입력된 정답은 {len(ans_list)}개입니다. 개수를 맞춰주세요!")
@@ -176,8 +161,7 @@ with tab2:
                     supabase.table("questions").delete().eq("exam_id", reg_exam_id).execute()
                     bulk_data = []
                     for i in range(reg_total_q):
-                        tag_name = tag_list[i % len(tag_list)] if tag_list and tag_list[0] else "기본개념"
-                        
+                        # [변경] concept_tags 란에는 무조건 빈 배열 또는 기본 개념 처리를 하여 에러 요소를 배제합니다.
                         row_data = {
                             "year": reg_year,
                             "month": reg_month,
@@ -186,7 +170,7 @@ with tab2:
                             "exam_id": reg_exam_id,
                             "question_number": i + 1,
                             "answer": ans_list[i],
-                            "concept_tags": [tag_name]
+                            "concept_tags": [] 
                         }
                         bulk_data.append(row_data)
                     
@@ -197,13 +181,12 @@ with tab2:
                     st.error(f"등록 실패: {e}")
 
 # ==========================================
-# 탭 3: 내가 작성한 오답노트 보관함 (개인별 격리 복습)
+# 탭 3: 내가 작성한 오답노트 보관함
 # ==========================================
 with tab3:
     st.title("🔍 내 손안의 오답노트 보관함")
     st.caption(f"현재 **[{user_name}]** 님이 클라우드 DB에 기록한 오답 기록만 필터링하여 보여줍니다.")
 
-    # [개선] 전체가 아닌 '내 이름(user_name)'으로 등록된 오답 시험지 리스트만 쏙 골라옴
     try:
         exam_res = supabase.table("wrong_notes").select("exam_id").eq("user_name", user_name).execute()
         exam_list = list(set([n["exam_id"] for n in exam_res.data])) if exam_res.data else []
@@ -217,7 +200,6 @@ with tab3:
 
         if selected_exam:
             with st.spinner("오답 기록장 가져오는 중..."):
-                # [개선] 해당 시험 정보 중에서도 내 오답노트만 불러오기
                 notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", selected_exam).eq("user_name", user_name).execute()
                 saved_notes = notes_res.data
 
@@ -234,12 +216,11 @@ with tab3:
                     for note in saved_notes:
                         q_num = note["question_number"]
                         q_info = questions_dict.get(q_num, {})
-                        concept = ", ".join(q_info.get("concept_tags", [])) if q_info.get("concept_tags") else "기본개념"
                         correct_ans = q_info.get("answer", "알 수 없음")
 
                         with st.container(border=True):
                             st.markdown(f"### ❓ {q_num}번 문제")
-                            st.markdown(f"**🏷️ 출제 개념:** `{concept}`   |   **🎯 실제 정답:** `{correct_ans}`")
+                            st.markdown(f"**🎯 실제 정답:** `{correct_ans}`")
                             
                             new_memo = st.text_area(
                                 "✍️ 내가 적었던 오답 기록", 
