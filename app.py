@@ -13,16 +13,39 @@ supabase = init_supabase()
 
 st.set_page_config(page_title="스마트 오답노트 마스터", layout="wide")
 
-# 사이드바를 공통 영역으로 활용하여 사용자 정보 및 비밀번호 상시 입력받음
+# 사이드바를 공통 영역으로 활용하여 사용자 정보, 시험지 선택, 피드백 입력받음
 with st.sidebar:
     st.header("👤 사용자 인증")
     user_name = st.text_input("내 이름(닉네임)을 입력하세요", value="홍길동").strip()
-    # 🔒 비밀번호 입력 칸 추가 (type="password"로 설정하여 타인에게 보이지 않게 처리)
     user_password = st.text_input("비밀번호를 입력하세요", value="", type="password").strip()
     
     st.divider()
     st.header("⚙️ 시험지 선택")
     exam_id = st.text_input("시험 이름을 입력하세요", value="2026년 3월 고3 수학", key="search_exam_id")
+
+    st.divider()
+    # 💬 개발자 피드백 수집 구역 추가
+    st.header("✉️ 개발자에게 한마디")
+    st.caption("앱을 쓰면서 불편했던 점이나 바라는 점을 적어주시면 개발자에게 전송됩니다!")
+    
+    # st.form을 사용하여 피드백을 보낼 때 화면이 무조건 전체 새로고침되는 것을 방지
+    with st.form(key="feedback_form", clear_on_submit=True):
+        feedback_text = st.text_area("피드백 내용", placeholder="여기에 의견을 입력하세요...", max_chars=500)
+        submit_feedback = st.form_submit_button("🚀 피드백 전송하기", use_container_width=True)
+        
+        if submit_feedback:
+            if not feedback_text.strip():
+                st.error("내용을 입력한 뒤 전송해 주세요!")
+            else:
+                try:
+                    # Supabase의 feedbacks 테이블로 데이터 insert
+                    supabase.table("feedbacks").insert({
+                        "user_name": user_name if user_name else "익명",
+                        "content": feedback_text.strip()
+                    }).execute()
+                    st.success("💖 피드백이 개발자에게 안전하게 전달되었습니다. 감사합니다!")
+                except Exception as fb_err:
+                    st.error(f"피드백 전송 실패: {fb_err}")
 
 # 화면 상단 탭 3개 유지
 tab1, tab2, tab3 = st.tabs([
@@ -82,7 +105,7 @@ with tab1:
             wrong_questions = []
             correct_count = 0
             
-            # 조회할 때도 이름과 비밀번호가 맞는 메모만 가져옴
+            # 동명이인 방지 내 데이터 로드
             notes_res = supabase.table("wrong_notes").select("*") \
                 .eq("exam_id", exam_id.strip()) \
                 .eq("user_name", user_name) \
@@ -132,12 +155,11 @@ with tab1:
                                 "exam_id": exam_id.strip(), 
                                 "question_number": str(item['question_number']).strip(),
                                 "user_name": user_name, 
-                                "password": user_password, # 🔒 저장할 때 비밀번호 포함
+                                "password": user_password, 
                                 "user_memo": user_memo
                             }
                             
                             try:
-                                # 이름과 비밀번호가 모두 일치하는 기존 데이터가 있는지 체크
                                 check_res = supabase.table("wrong_notes") \
                                     .select("*") \
                                     .eq("exam_id", exam_id.strip()) \
@@ -213,7 +235,7 @@ with tab2:
                     st.error(f"등록 실패: {e}")
 
 # ==========================================
-# 탭 3: 내가 작성한 오답노트 보관함 (🔒 이름 + 비밀번호 일치 인증)
+# 탭 3: 내가 작성한 오답노트 보관함
 # ==========================================
 with tab3:
     st.title("🔍 내 손안의 오답노트 보관함")
@@ -222,7 +244,6 @@ with tab3:
         st.warning("🔒 사이드바에 이름과 비밀번호를 입력하셔야 보관함을 열 수 있습니다.")
     else:
         try:
-            # 🔒 입력한 이름과 비밀번호가 '모두 일치'하는 시험지만 목록에 노출
             exam_res = supabase.table("wrong_notes").select("exam_id") \
                 .eq("user_name", user_name) \
                 .eq("password", user_password) \
@@ -232,13 +253,12 @@ with tab3:
             exam_list = []
 
         if not exam_list:
-            st.info(f"💡 [{user_name}]님 정보와 일치하는 오답 메모가 없습니다. 이름과 비밀번호를 다시 확인해 주세요.")
+            st.info(f"💡 [{user_name}]님 정보 및 비밀번호와 정확히 일치하는 오답 메모가 없습니다. 다시 확인해 주세요.")
         else:
             selected_exam = st.selectbox("복습할 시험지를 선택하세요", exam_list, key="select_review_exam")
 
             if selected_exam:
-                with st.spinner("보안 인증 확인 및 오답 기록장 로드 중..."):
-                    # 🔒 가져올 때도 이름과 패스워드를 더블 체크하여 철저히 보안 유지
+                with st.spinner("오답 기록장 로드 중..."):
                     notes_res = supabase.table("wrong_notes").select("*") \
                         .eq("exam_id", selected_exam.strip()) \
                         .eq("user_name", user_name) \
@@ -267,7 +287,8 @@ with tab3:
                             
                             new_memo = st.text_area("✍️ 오답 기록 수정", value=note["user_memo"], key=f"review_{selected_exam}_{q_num_str}")
 
-                            col1, col2 = st.columns([1, 8])
+                            col1, col2, col3 = st.columns([1, 1, 8])
+                            
                             with col1:
                                 edit_btn = st.form_submit_button("📝 수정")
                                 if edit_btn:
@@ -280,7 +301,23 @@ with tab3:
                                             .eq("password", user_password) \
                                             .execute()
                                         st.toast("💡 오답 메모가 수정되었습니다!")
+                                        st.rerun()
                                     except Exception as db_err:
                                         st.error(f"❌ 수정 실패: {db_err}")
+                                        
                             with col2:
+                                delete_btn = st.form_submit_button("🗑️ 삭제")
+                                if delete_btn:
+                                    try:
+                                        supabase.table("wrong_notes").delete() \
+                                            .eq("exam_id", selected_exam.strip()) \
+                                            .eq("question_number", q_num_str) \
+                                            .eq("user_name", user_name) \
+                                            .eq("password", user_password) \
+                                            .execute()
+                                        st.toast(f"🗑️ {q_num_str}번 오답 기록이 영구 삭제되었습니다.")
+                                        st.rerun()
+                                    except Exception as db_err:
+                                        st.error(f"❌ 삭제 실패: {db_err}")
+                            with col3:
                                 pass
