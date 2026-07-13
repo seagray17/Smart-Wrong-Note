@@ -10,8 +10,12 @@ SUPABASE_KEY = "sb_publishable_c0dtskcvaF1CjK9fZwBm-g_XgRg6hXH"
 # 디스코드 웹훅 주소
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1526179676924674131/BiC8_dzOucdmx6-8j--22MNpbeGdIwCdQr8x_9B0goOYb68m0Q0cKCy8vFz8sLElX0wo"
 
-# 🔒 [관리자 마스터 비밀번호 설정] 원하시는 비밀번호로 변경하세요!
-ADMIN_MASTER_PASSWORD = "admin1234"
+# 🔒 [보안 강화] 스트림릿 Secrets 환경변수에서 비밀번호를 안전하게 로드합니다.
+# 만약 세팅 전이거나 에러가 날 경우를 대비해 디폴트 값('admin1234')을 지정해둡니다.
+if "ADMIN_MASTER_PASSWORD" in st.secrets:
+    ADMIN_MASTER_PASSWORD = st.secrets["ADMIN_MASTER_PASSWORD"]
+else:
+    ADMIN_MASTER_PASSWORD = "admin1234"
 
 @st.cache_resource
 def init_supabase() -> Client:
@@ -225,7 +229,7 @@ with tab1:
                                 st.error(f"❌ 데이터베이스 저장 실패: {db_err}")
 
 # ==========================================
-# 탭 2: 관리자용 [가변형 정답 등록기] (보안 강화 완료)
+# 탭 2: 관리자용 [가변형 정답 등록기]
 # ==========================================
 with tab2:
     st.title("⚙️ 모의고사 정답 초고속 등록기")
@@ -246,7 +250,6 @@ with tab2:
         submit_registration = st.form_submit_button("🔥 클릭 한 번으로 DB에 맞춤형 문항 일괄 등록", type="primary")
 
     if submit_registration:
-        # 🔒 핵심 보안 로직: 마스터 패스워드 검증
         if admin_password_input != ADMIN_MASTER_PASSWORD:
             st.error("❌ 관리자 비밀번호가 올바르지 않습니다! 정답지 등록 권한이 없습니다.")
         else:
