@@ -54,21 +54,23 @@ with tab1:
         total_q = 20
         st.warning(f"⚠️ '{exam_id}'은(는) 아직 등록되지 않은 시험지입니다. [정답 등록하기] 탭에서 먼저 등록해 주세요.")
 
-    st.subheader(f"✍️ 내 답안 마킹 (1번 ~ {total_q}번)")
-    user_answers = {}
+    # 🚨 [핵심 변경] 마킹할 때 실시간 렉으로 튕기는 것을 막기 위해 form으로 감싸기
+    with st.form(key="marking_form"):
+        st.subheader(f"✍️ 내 답안 마킹 (1번 ~ {total_q}번)")
+        user_answers = {}
 
-    num_rows = (total_q + 3) // 4
-    for row in range(num_rows):
-        cols = st.columns(4)
-        for col_idx in range(4):
-            q_num = row * 4 + col_idx + 1
-            if q_num <= total_q:
-                with cols[col_idx]:
-                    user_answers[str(q_num)] = st.text_input(f"{q_num}번 답", key=f"q_{q_num}", value="")
+        num_rows = (total_q + 3) // 4
+        for row in range(num_rows):
+            cols = st.columns(4)
+            for col_idx in range(4):
+                q_num = row * 4 + col_idx + 1
+                if q_num <= total_q:
+                    with cols[col_idx]:
+                        user_answers[str(q_num)] = st.text_input(f"{q_num}번 답", key=f"q_{q_num}", value="")
 
-    st.divider()
+        submit_marking = st.form_submit_button("🚀 전 문항 일괄 채점 및 분석하기", type="primary")
 
-    if st.button("🚀 전 문항 일괄 채점 및 분석하기", type="primary"):
+    if submit_marking:
         if not questions_db:
             st.error("등록되지 않은 시험지는 채점할 수 없습니다.")
         else:
@@ -105,8 +107,6 @@ with tab1:
                     st.balloons()
                     st.info("와우! 만점입니다! 🎉")
                 else:
-                    # [삭제] 크래시를 유발하던 개념 태그 분석 통계 차트(st.bar_chart)를 전면 제거했습니다.
-                    
                     st.subheader(f"❌ 틀린 문제 오답 노트 ({wrong_count}문항)")
                     
                     for item in wrong_questions:
@@ -126,31 +126,32 @@ with tab1:
                                 st.toast(f"🎉 {item['question_number']}번 오답 메모가 [{user_name}]님 전용 공간에 저장되었습니다!")
 
 # ==========================================
-# 탭 2: 관리자용 [가변형 정답 등록기] - 태그 기능 제거 버전
+# 탭 2: 관리자용 [가변형 정답 등록기] - 완전히 격리된 Form 구조
 # ==========================================
 with tab2:
     st.title("⚙️ 모의고사 정답 초고속 등록기")
     st.caption("과목별로 다른 시험 문제 수를 자유롭게 지정하여 등록할 수 있습니다.")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1: reg_year = st.number_input("년도", value=2026, step=1)
-    with col2: reg_month = st.number_input("월", value=3, step=1)
-    with col3: reg_grade = st.selectbox("학년", ["고1", "고2", "고3"], index=2)
-    with col4: reg_subject = st.text_input("과목", value="수학")
-    with col5: reg_total_q = st.number_input("총 문항 수", value=20, min_value=1, max_value=100, step=1)
+    # 🚨 [가장 중요한 변경] 정답 입력창을 st.form으로 격리하여 붙여넣을 때 화면이 날아가는 현상 원천 차단
+    with st.form(key="register_form"):
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1: reg_year = st.number_input("년도", value=2026, step=1)
+        with col2: reg_month = st.number_input("월", value=3, step=1)
+        with col3: reg_grade = st.selectbox("학년", ["고1", "고2", "고3"], index=2)
+        with col4: reg_subject = st.text_input("과목", value="수학")
+        with col5: reg_total_q = st.number_input("총 문항 수", value=20, min_value=1, max_value=100, step=1)
 
-    reg_exam_id = f"{reg_year}년 {reg_month}월 {reg_grade} {reg_subject}"
-    st.info(f"생성될 시험 이름: **{reg_exam_id}** (총 {reg_total_q}문항)")
+        st.subheader("📋 정답 일괄 입력")
+        st.caption("정확히 설정된 문항 수만큼의 정답을 띄어쓰기로 구분해서 입력해 주세요.")
+        
+        default_ans = " ".join(["1" if i%5==0 else "2" if i%5==1 else "3" if i%5==2 else "4" if i%5==3 else "5" for i in range(20)])
+        raw_answers = st.text_input("정답 입력창", value=default_ans)
 
-    st.subheader("📋 정답 일괄 입력")
-    st.caption(f"정확히 **{reg_total_q}개**의 정답을 띄어쓰기로 구분해서 입력해 주세요.")
-    
-    default_ans = " ".join(["1" if i%5==0 else "2" if i%5==1 else "3" if i%5==2 else "4" if i%5==3 else "5" for i in range(reg_total_q)])
-    raw_answers = st.text_input("정답 입력창", value=default_ans)
+        # 폼 내부의 제출 버튼
+        submit_registration = st.form_submit_button("🔥 클릭 한 번으로 DB에 맞춤형 문항 일괄 등록", type="primary")
 
-    # [삭제] 크래시의 원인인 '단원 개념 태그 입력창(raw_tags)'을 전면 삭제했습니다.
-
-    if st.button("🔥 클릭 한 번으로 DB에 맞춤형 문항 일괄 등록", type="primary"):
+    if submit_registration:
+        reg_exam_id = f"{reg_year}년 {reg_month}월 {reg_grade} {reg_subject}"
         ans_list = raw_answers.strip().split()
         
         if len(ans_list) != reg_total_q:
@@ -161,7 +162,6 @@ with tab2:
                     supabase.table("questions").delete().eq("exam_id", reg_exam_id).execute()
                     bulk_data = []
                     for i in range(reg_total_q):
-                        # [변경] concept_tags 란에는 무조건 빈 배열 또는 기본 개념 처리를 하여 에러 요소를 배제합니다.
                         row_data = {
                             "year": reg_year,
                             "month": reg_month,
