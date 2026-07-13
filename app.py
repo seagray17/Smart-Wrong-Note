@@ -13,10 +13,12 @@ supabase = init_supabase()
 
 st.set_page_config(page_title="스마트 오답노트 마스터", layout="wide")
 
-# 사이드바를 공통 영역으로 활용하여 사용자 정보를 상시 입력받음
+# 사이드바를 공통 영역으로 활용하여 사용자 정보 및 비밀번호 상시 입력받음
 with st.sidebar:
     st.header("👤 사용자 인증")
     user_name = st.text_input("내 이름(닉네임)을 입력하세요", value="홍길동").strip()
+    # 🔒 비밀번호 입력 칸 추가 (type="password"로 설정하여 타인에게 보이지 않게 처리)
+    user_password = st.text_input("비밀번호를 입력하세요", value="", type="password").strip()
     
     st.divider()
     st.header("⚙️ 시험지 선택")
@@ -36,8 +38,8 @@ with tab1:
     st.title("📊 스마트 오답노트 채점기")
     st.caption(f"현재 **[{user_name}]** 님으로 접속 중입니다. 본인의 답안을 채점하세요.")
 
-    if not user_name:
-        st.error("⚠️ 사이드바에 이름을 입력해 주셔야 오답노트 저장이 가능합니다.")
+    if not user_name or not user_password:
+        st.error("⚠️ 사이드바에 이름과 비밀번호를 모두 입력해 주셔야 오답노트 저장 및 조회가 가능합니다.")
         st.stop()
 
     questions_db = []
@@ -80,7 +82,12 @@ with tab1:
             wrong_questions = []
             correct_count = 0
             
-            notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", exam_id.strip()).eq("user_name", user_name).execute()
+            # 조회할 때도 이름과 비밀번호가 맞는 메모만 가져옴
+            notes_res = supabase.table("wrong_notes").select("*") \
+                .eq("exam_id", exam_id.strip()) \
+                .eq("user_name", user_name) \
+                .eq("password", user_password) \
+                .execute()
             saved_memos = {str(n["question_number"]): n["user_memo"] for n in notes_res.data}
             
             questions_db.sort(key=lambda x: x["question_number"])
@@ -123,18 +130,20 @@ with tab1:
                         if save_btn:
                             save_data = {
                                 "exam_id": exam_id.strip(), 
-                                "question_number": str(item['question_number']).strip(), # 문자열 공백 제거 통일
+                                "question_number": str(item['question_number']).strip(),
                                 "user_name": user_name, 
+                                "password": user_password, # 🔒 저장할 때 비밀번호 포함
                                 "user_memo": user_memo
                             }
                             
                             try:
-                                # upsert 대신 안전한 수동 분기 처리
+                                # 이름과 비밀번호가 모두 일치하는 기존 데이터가 있는지 체크
                                 check_res = supabase.table("wrong_notes") \
                                     .select("*") \
                                     .eq("exam_id", exam_id.strip()) \
                                     .eq("question_number", str(item['question_number']).strip()) \
                                     .eq("user_name", user_name) \
+                                    .eq("password", user_password) \
                                     .execute()
                                 
                                 if check_res.data:
@@ -143,6 +152,7 @@ with tab1:
                                         .eq("exam_id", exam_id.strip()) \
                                         .eq("question_number", str(item['question_number']).strip()) \
                                         .eq("user_name", user_name) \
+                                        .eq("password", user_password) \
                                         .execute()
                                 else:
                                     supabase.table("wrong_notes").insert(save_data).execute()
@@ -203,39 +213,48 @@ with tab2:
                     st.error(f"등록 실패: {e}")
 
 # ==========================================
-# 탭 3: 내가 작성한 오답노트 보관함 (매칭 성능 보완 완료)
+# 탭 3: 내가 작성한 오답노트 보관함 (🔒 이름 + 비밀번호 일치 인증)
 # ==========================================
 with tab3:
     st.title("🔍 내 손안의 오답노트 보관함")
 
-    try:
-        exam_res = supabase.table("wrong_notes").select("exam_id").eq("user_name", user_name).execute()
-        exam_list = list(set([n["exam_id"].strip() for n in exam_res.data])) if exam_res.data else []
-    except Exception as e:
-        exam_list = []
-
-    if not exam_list:
-        st.info(f"💡 [{user_name}]님 이름으로 저장된 오답 메모가 아직 없습니다.")
+    if not user_name or not user_password:
+        st.warning("🔒 사이드바에 이름과 비밀번호를 입력하셔야 보관함을 열 수 있습니다.")
     else:
-        selected_exam = st.selectbox("복습할 시험지를 선택하세요", exam_list, key="select_review_exam")
+        try:
+            # 🔒 입력한 이름과 비밀번호가 '모두 일치'하는 시험지만 목록에 노출
+            exam_res = supabase.table("wrong_notes").select("exam_id") \
+                .eq("user_name", user_name) \
+                .eq("password", user_password) \
+                .execute()
+            exam_list = list(set([n["exam_id"].strip() for n in exam_res.data])) if exam_res.data else []
+        except Exception as e:
+            exam_list = []
 
-        if selected_exam:
-            with st.spinner("오답 기록장 가져오는 중..."):
-                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", selected_exam.strip()).eq("user_name", user_name).execute()
-                saved_notes = notes_res.data
+        if not exam_list:
+            st.info(f"💡 [{user_name}]님 정보와 일치하는 오답 메모가 없습니다. 이름과 비밀번호를 다시 확인해 주세요.")
+        else:
+            selected_exam = st.selectbox("복습할 시험지를 선택하세요", exam_list, key="select_review_exam")
 
-                q_res = supabase.table("questions").select("*").eq("exam_id", selected_exam.strip()).execute()
-                
-                # 데이터 타입(int vs text) 충돌을 막기 위해 딕셔너리 Key를 문자열 스트립 형태로 강제 가공
-                questions_dict = {str(q["question_number"]).strip(): q for q in q_res.data} if q_res.data else {}
+            if selected_exam:
+                with st.spinner("보안 인증 확인 및 오답 기록장 로드 중..."):
+                    # 🔒 가져올 때도 이름과 패스워드를 더블 체크하여 철저히 보안 유지
+                    notes_res = supabase.table("wrong_notes").select("*") \
+                        .eq("exam_id", selected_exam.strip()) \
+                        .eq("user_name", user_name) \
+                        .eq("password", user_password) \
+                        .execute()
+                    saved_notes = notes_res.data
 
-                if not saved_notes:
-                    st.info("이 시험지에는 저장된 오답 메모가 없습니다.")
-                else:
-                    st.subheader(f"📋 '{selected_exam}' 오답 복습 리스트 (총 {len(saved_notes)}문항)")
-                    
-                    # 문항 정렬 시 텍스트 번호를 숫자로 안전하게 파싱하여 순서대로 정렬
-                    saved_notes.sort(key=lambda x: int(str(x["question_number"]).strip()) if str(x["question_number"]).strip().isdigit() else 0)
+                    q_res = supabase.table("questions").select("*").eq("exam_id", selected_exam.strip()).execute()
+                    questions_dict = {str(q["question_number"]).strip(): q for q in q_res.data} if q_res.data else {}
+
+                    if not saved_notes:
+                        st.info("이 시험지에는 저장된 오답 메모가 없습니다.")
+                    else:
+                        st.subheader(f"📋 '{selected_exam}' 오답 복습 리스트 (총 {len(saved_notes)}문항)")
+                        
+                        saved_notes.sort(key=lambda x: int(str(x["question_number"]).strip()) if str(x["question_number"]).strip().isdigit() else 0)
 
                     for note in saved_notes:
                         q_num_str = str(note["question_number"]).strip()
@@ -258,6 +277,7 @@ with tab3:
                                             .eq("exam_id", selected_exam.strip()) \
                                             .eq("question_number", q_num_str) \
                                             .eq("user_name", user_name) \
+                                            .eq("password", user_password) \
                                             .execute()
                                         st.toast("💡 오답 메모가 수정되었습니다!")
                                     except Exception as db_err:
