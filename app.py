@@ -13,7 +13,17 @@ supabase = init_supabase()
 
 st.set_page_config(page_title="스마트 오답노트 마스터", layout="wide")
 
-# 화면 상단 탭을 3개로 확장!
+# 사이드바를 공통 영역으로 활용하여 사용자 정보를 상시 입력받음
+with st.sidebar:
+    st.header("👤 사용자 인증")
+    # [핵심] 여러 사람이 쓸 때 누가 누군지 구분하는 고유 이름(아이디)
+    user_name = st.text_input("내 이름(닉네임)을 입력하세요", value="홍길동").strip()
+    
+    st.divider()
+    st.header("⚙️ 시험지 선택")
+    exam_id = st.text_input("시험 이름을 입력하세요", value="2026년 3월 고3 수학", key="search_exam_id")
+
+# 화면 상단 탭 3개 유지
 tab1, tab2, tab3 = st.tabs([
     "📝 모의고사 채점하기", 
     "⚙️ 새 시험지 정답 등록하기", 
@@ -21,15 +31,15 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # ==========================================
-# 탭 1: 모의고사 채점 및 취약점 분석 (학생용)
+# 탭 1: 모의고사 채점 및 취약점 분석 (개인별 오답 저장)
 # ==========================================
 with tab1:
     st.title("📊 취약점 분석 스마트 오답노트")
-    st.caption("실시간으로 채점하고, 내가 어떤 개념 단원에 취약한지 차트로 분석해 줍니다.")
+    st.caption(f"현재 **[{user_name}]** 님으로 접속 중입니다. 본인의 답안을 채점하세요.")
 
-    with st.sidebar:
-        st.header("⚙️ 시험지 선택")
-        exam_id = st.text_input("시험 이름을 입력하세요", value="2026년 3월 고3 수학", key="search_exam_id")
+    if not user_name:
+        st.error("⚠️ 사이드바에 이름을 입력해 주셔야 오답노트 저장이 가능합니다.")
+        st.stop()
 
     questions_db = []
     try:
@@ -67,7 +77,8 @@ with tab1:
                 wrong_questions = []
                 correct_count = 0
                 
-                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", exam_id.strip()).execute()
+                # [개선] 오답 노트를 불러올 때 '현재 로그인한 사용자(user_name)'의 데이터만 필터링해서 가져옴
+                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", exam_id.strip()).eq("user_name", user_name).execute()
                 saved_memos = {str(n["question_number"]): n["user_memo"] for n in notes_res.data}
                 
                 questions_db.sort(key=lambda x: x["question_number"])
@@ -117,16 +128,22 @@ with tab1:
                             
                             user_memo = st.text_area("오답 메모", value=item['saved_memo'], key=f"input_{exam_id}_{item['question_number']}")
                             if st.button("💾 DB에 영구 저장하기", key=f"btn_{exam_id}_{item['question_number']}"):
-                                save_data = {"exam_id": exam_id.strip(), "question_number": item['question_number'], "user_memo": user_memo}
-                                supabase.table("wrong_notes").upsert(save_data, on_conflict="exam_id,question_number").execute()
-                                st.toast(f"🎉 {item['question_number']}번 오답 메모 저장 완료!")
+                                # [개선] 저장할 때 누구의 오답노트인지 user_name을 같이 명시하여 저장
+                                save_data = {
+                                    "exam_id": exam_id.strip(), 
+                                    "question_number": item['question_number'], 
+                                    "user_name": user_name, 
+                                    "user_memo": user_memo
+                                }
+                                supabase.table("wrong_notes").upsert(save_data, on_conflict="exam_id,question_number,user_name").execute()
+                                st.toast(f"🎉 {item['question_number']}번 오답 메모가 [{user_name}]님 전용 공간에 저장되었습니다!")
 
 # ==========================================
 # 탭 2: 관리자용 [가변형 정답 등록기]
 # ==========================================
 with tab2:
     st.title("⚙️ 모의고사 정답 초고속 등록기")
-    st.caption("과목별로 다른 시험 문제 수를 자유롭게 지정하여 등록할 수 있습니다.")
+    st.caption("과목별로 다른 시험 문제 수를 자유롭게 지정하여 등록할 수 있습니다. (정답지는 전 세계 공통입니다.)")
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: reg_year = st.number_input("년도", value=2026, step=1)
@@ -180,32 +197,30 @@ with tab2:
                     st.error(f"등록 실패: {e}")
 
 # ==========================================
-# 🆕 탭 3: 내가 작성한 오답노트 보관함 (복습 전용)
+# 탭 3: 내가 작성한 오답노트 보관함 (개인별 격리 복습)
 # ==========================================
 with tab3:
     st.title("🔍 내 손안의 오답노트 보관함")
-    st.caption("지금까지 클라우드 DB에 기록한 나만의 오답 기록들을 한눈에 확인하고 복습하세요.")
+    st.caption(f"현재 **[{user_name}]** 님이 클라우드 DB에 기록한 오답 기록만 필터링하여 보여줍니다.")
 
-    # 1. DB에 저장된 오답 리스트 중 어떤 시험지들이 있는지 싹 긁어오기 (선택박스용)
+    # [개선] 전체가 아닌 '내 이름(user_name)'으로 등록된 오답 시험지 리스트만 쏙 골라옴
     try:
-        exam_res = supabase.table("wrong_notes").select("exam_id").execute()
+        exam_res = supabase.table("wrong_notes").select("exam_id").eq("user_name", user_name).execute()
         exam_list = list(set([n["exam_id"] for n in exam_res.data])) if exam_res.data else []
     except Exception as e:
         exam_list = []
 
     if not exam_list:
-        st.info("💡 아직 클라우드에 저장된 오답 메모가 없습니다. 먼저 [모의고사 채점하기]에서 오답 메모를 작성해 보세요!")
+        st.info(f"💡 [{user_name}]님 이름으로 저장된 오답 메모가 아직 없습니다. 채점하기에서 메모를 먼저 작성해 보세요!")
     else:
-        # 학생들이 저장했던 시험지 목록 중 하나를 고르게 합니다.
         selected_exam = st.selectbox("복습할 시험지를 선택하세요", exam_list, key="select_review_exam")
 
         if selected_exam:
             with st.spinner("오답 기록장 가져오는 중..."):
-                # 2. 해당 시험의 오답 메모 전체 로드
-                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", selected_exam).execute()
+                # [개선] 해당 시험 정보 중에서도 내 오답노트만 불러오기
+                notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", selected_exam).eq("user_name", user_name).execute()
                 saved_notes = notes_res.data
 
-                # 3. 매칭할 원본 문제 정보(개념 태그, 진짜 정답) 로드
                 q_res = supabase.table("questions").select("*").eq("exam_id", selected_exam).execute()
                 questions_dict = {q["question_number"]: q for q in q_res.data} if q_res.data else {}
 
@@ -214,7 +229,6 @@ with tab3:
                 else:
                     st.subheader(f"📋 '{selected_exam}' 오답 복습 리스트 (총 {len(saved_notes)}문항)")
                     
-                    # 문제 번호 순서대로 정렬해서 출력
                     saved_notes.sort(key=lambda x: x["question_number"])
 
                     for note in saved_notes:
@@ -227,7 +241,6 @@ with tab3:
                             st.markdown(f"### ❓ {q_num}번 문제")
                             st.markdown(f"**🏷️ 출제 개념:** `{concept}`   |   **🎯 실제 정답:** `{correct_ans}`")
                             
-                            # 적어둔 메모를 보여주고 여기서 바로 수정도 가능하게 처리!
                             new_memo = st.text_area(
                                 "✍️ 내가 적었던 오답 기록", 
                                 value=note["user_memo"], 
@@ -240,11 +253,12 @@ with tab3:
                                     supabase.table("wrong_notes").upsert({
                                         "exam_id": selected_exam,
                                         "question_number": q_num,
+                                        "user_name": user_name,
                                         "user_memo": new_memo
-                                    }, on_conflict="exam_id,question_number").execute()
+                                    }, on_conflict="exam_id,question_number,user_name").execute()
                                     st.toast("💡 오답 메모가 수정되었습니다!")
                             with col2:
                                 if st.button("🗑️ 삭제", key=f"del_btn_{selected_exam}_{q_num}"):
-                                    supabase.table("wrong_notes").delete().eq("exam_id", selected_exam).eq("question_number", q_num).execute()
+                                    supabase.table("wrong_notes").delete().eq("exam_id", selected_exam).eq("question_number", q_num).eq("user_name", user_name).execute()
                                     st.toast("🗑️ 오답 메모가 삭제되었습니다.")
-                                    st.rerun() # 화면 새로고침하여 목록에서 바로 지움
+                                    st.rerun()
