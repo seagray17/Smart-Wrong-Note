@@ -4,12 +4,6 @@ import hashlib
 from urllib.request import Request, urlopen
 from supabase import create_client, Client
 
-# 🤖 구글 Gemini 라이브러리 로드
-try:
-    from google import genai
-except ImportError:
-    st.error("⚠️ 라이브러리 누락! requirements.txt 파일에 'google-genai'를 추가한 후 GitHub에 올려주세요.")
-
 # 내장 연동 정보
 SUPABASE_URL = "https://kktrkhfpxeavhaugzohd.supabase.co"
 SUPABASE_KEY = "sb_publishable_c0dtskcvaF1CjK9fZwBm-g_XgRg6hXH"
@@ -17,7 +11,6 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1526179676924674131/BiC8
 
 # 🔒 Secrets 로드
 ADMIN_MASTER_PASSWORD = st.secrets.get("ADMIN_MASTER_PASSWORD", "admin1234")
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 @st.cache_resource
 def init_supabase() -> Client:
@@ -163,7 +156,6 @@ with tab1:
         else:
             wrong_questions = []
             correct_count = 0
-            # 이제 password 조건 없이 user_name만으로 조회 (이미 안전하게 로그인 검증됨)
             notes_res = supabase.table("wrong_notes").select("*").eq("exam_id", exam_id.strip()).eq("user_name", user_name).execute()
             saved_memos = {str(n["question_number"]): n["user_memo"] for n in notes_res.data}
             questions_db.sort(key=lambda x: x["question_number"])
@@ -188,53 +180,63 @@ with tab1:
                                 if check_res.data: 
                                     supabase.table("wrong_notes").update({"user_memo": user_memo}).eq("exam_id", exam_id.strip()).eq("question_number", str(item['question_number'])).eq("user_name", user_name).execute()
                                 else: 
-                                    # password 필드는 DB 구조 호환성을 위해 빈 문자열 혹은 생략 처리 (여기선 빈 값 처리)
                                     supabase.table("wrong_notes").insert({"exam_id": exam_id.strip(), "question_number": str(item['question_number']), "user_name": user_name, "password": "", "user_memo": user_memo}).execute()
                                 st.toast("저장 완료!")
                             except Exception as e: st.error(f"실패: {e}")
 
 # ==========================================
-# 탭 2: 🤖 AI 초고속 자동 정답 등록기
+# 탭 2: 관리자용 [정답 일괄 등록기] (제미나이 삭제 버전)
 # ==========================================
 with tab2:
-    st.title("⚙️ AI 모의고사 정답 초고속 등록기")
-    st.info("💡 인터넷(EBSi 등)에서 정답표 텍스트를 대충 긁어서 넣으면 AI가 알아서 정답만 뽑아 등록합니다!")
+    st.title("⚙️ 모의고사 정답 초고속 등록기")
+    st.info("⚠️ 악용 방지를 위해 정답을 일괄 등록하려면 사이드바 하단의 **[🔒 관리자 전용 인증]** 암호가 정확해야 합니다.")
     
     with st.form(key="register_form"):
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: reg_year = st.number_input("년도", value=2026, step=1)
-        with c2: reg_month = st.number_input("월", value=3, step=1)
-        with c3: reg_grade = st.selectbox("학년", ["고1", "고2", "고3"], index=2)
-        with c4: reg_subject = st.text_input("과목", value="수학")
-        
-        st.subheader("🤖 AI 자동 가공창")
-        raw_text_input = st.text_area("정답표 텍스트 붙여넣기", placeholder="예시: [1] ③  [2] ① ...")
-        submit_registration = st.form_submit_button("🔥 AI를 통해 정답지 자동 등록하기", type="primary")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1: reg_year = st.number_input("년도", value=2026, step=1)
+        with col2: reg_month = st.number_input("월", value=3, step=1)
+        with col3: reg_grade = st.selectbox("학년", ["고1", "고2", "고3"], index=2)
+        with col4: reg_subject = st.text_input("과목", value="수학")
+        with col5: reg_total_q = st.number_input("총 문항 수", value=20, min_value=1, max_value=100, step=1)
+
+        st.subheader("📋 정답 일괄 입력")
+        default_ans = " ".join(["1" if i%5==0 else "2" if i%5==1 else "3" if i%5==2 else "4" if i%5==3 else "5" for i in range(20)])
+        raw_answers = st.text_input("정답 입력창 (숫자들을 공백으로 구분해서 입력하세요)", value=default_ans)
+
+        submit_registration = st.form_submit_button("🔥 클릭 한 번으로 DB에 맞춤형 문항 일괄 등록", type="primary")
 
     if submit_registration:
         if admin_password_input != ADMIN_MASTER_PASSWORD:
-            st.error("❌ 관리자 비밀번호가 올바르지 않습니다.")
-        elif not raw_text_input.strip():
-            st.error("❌ 정답표 텍스트를 입력해 주세요.")
-        elif not GEMINI_API_KEY:
-            st.error("❌ Secrets에 GEMINI_API_KEY가 없습니다.")
+            st.error("❌ 관리자 비밀번호가 올바르지 않습니다! 정답지 등록 권한이 없습니다.")
         else:
             reg_exam_id = f"{reg_year}년 {reg_month}월 {reg_grade} {reg_subject}"
-            with st.spinner("🤖 Gemini AI가 지저분한 텍스트에서 정답을 분석하는 중..."):
-                try:
-                    client = genai.Client(api_key=GEMINI_API_KEY)
-                    prompt = f"다음 텍스트는 모의고사 정답표입니다. 문항 정답 숫자만 순서대로 공백으로 구분해서 출력해줘. 예시 결과: '3 1 5 4'\n\n{raw_text_input}"
-                    response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-                    ans_list = response.text.strip().split()
-                    
-                    if not ans_list: st.error("AI가 정답을 추출하는 데 실패했습니다.")
-                    else:
-                        st.write("🤖 **AI 추출 결과 파싱 성공!** 문항 수:", len(ans_list))
+            ans_list = raw_answers.strip().split()
+            
+            if len(ans_list) != reg_total_q:
+                st.error(f"설정된 문항 수는 {reg_total_q}개인데, 입력된 정답은 {len(ans_list)}개입니다.")
+            else:
+                with st.spinner("Supabase DB에 정답지 생성 중..."):
+                    try:
                         supabase.table("questions").delete().eq("exam_id", reg_exam_id).execute()
-                        bulk_data = [{"year": reg_year, "month": reg_month, "grade": reg_grade, "subject": reg_subject, "exam_id": reg_exam_id, "question_number": i + 1, "answer": ans, "concept_tags": []} for i, ans in enumerate(ans_list)]
+                        bulk_data = []
+                        for i in range(reg_total_q):
+                            row_data = {
+                                "year": reg_year,
+                                "month": reg_month,
+                                "grade": reg_grade,
+                                "subject": reg_subject,
+                                "exam_id": reg_exam_id,
+                                "question_number": i + 1,
+                                "answer": ans_list[i],
+                                "concept_tags": [] 
+                            }
+                            bulk_data.append(row_data)
+                        
                         supabase.table("questions").insert(bulk_data).execute()
-                        st.balloons(); st.success(f"🎉 '{reg_exam_id}' {len(ans_list)}문항 자동 등록 완료!")
-                except Exception as e: st.error(f"AI 자동 등록 실패: {e}")
+                        st.balloons()
+                        st.success(f"🎉 '{reg_exam_id}' 등록 성공!")
+                    except Exception as e:
+                        st.error(f"등록 실패: {e}")
 
 # ==========================================
 # 탭 3: 오답노트 보관함
